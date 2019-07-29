@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/ssd1306_i2c/checkTemp.sh
+ExecStart=/opt/temp_oled/checkTemp.sh
 RemainAfterExit=true
 StandardOutput=journal
 User=root

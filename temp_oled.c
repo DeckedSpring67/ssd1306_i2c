@@ -179,13 +179,14 @@ int main() {
 	//	temps.amb = getAmbTemp();
 		pthread_create(&ac_id, NULL, getAcTemp, &temps);
 		pthread_create(&amb_id, NULL, getAmbTemp, &temps);
+		
+		//Detach threads to avoid memory leak
+		pthread_join(ac_id,NULL);
+		pthread_join(amb_id,NULL);
 		if(temps.ac > temps.maxAC || temps.amb > temps.maxAMB){	
 			pthread_create(&hightemps_id, NULL, handle_HighTemp, &temps);
 		}
-		//Detach threads to avoid memory leak
 		pthread_detach(hightemps_id);
-		pthread_join(ac_id,NULL);
-		pthread_join(amb_id,NULL);
 		pthread_create(&refresh_id, NULL, refresh_display, &temps);
 		pthread_detach(refresh_id);
 		delay(500);

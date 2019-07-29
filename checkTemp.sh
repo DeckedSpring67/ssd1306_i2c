@@ -3,8 +3,8 @@
 if ! pgrep temp_oled >/dev/null
 then
 	echo "Temperature monitor is being restarted"
-	/opt/ssd1306_i2c/temp_oled < /opt/ssd1306_i2c/recipients &
-	/opt/ssd1306_i2c/setEmailSent.sh
+	/opt/temp_oled/temp_oled < /opt/temp_oled/recipients &
+	/opt/temp_oled/setEmailSent.sh
 else
 	echo "Temperature monitor is already running"
 fi
