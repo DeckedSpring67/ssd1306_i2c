@@ -15,29 +15,34 @@ typedef struct temps{
 	float amb;
 	float maxAC;
 	float maxAMB;
+	char **recipients;
+	int n_recipients;
 }t_temps;
 
 void send_email(t_temps *temps){
 	//TODO change recipient to an array of recipients that we get from a file
-	char* recipient = RECIPIENT;
-	char cmd[300];  
-	char to[100]; // email id of the recepient.
-	strcpy(to,recipient);
-	char body[400];    // email body.
-	char tempFile[100];     // name of tempfile.
+	int i = 0;
+	for(i = 0; i < temps->n_recipients;i++){
+		char* recipient = temps->recipients[i];
+		char cmd[300];  
+		char to[100]; // email id of the recepient.
+		strcpy(to,recipient);
+		char body[400];    // email body.
+		char tempFile[100];     // name of tempfile.
 
-	strcpy(tempFile,tempnam("/tmp","sendmail")); // generate temp file name with tempnam.
-	if(temps->ac > temps->maxAC)
-		sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
-	if(temps->amb > temps->maxAMB)
-		sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
-	FILE *fp = fopen(tempFile,"w"); // open it for writing.
-	fprintf(fp,"Subject: Rilevata temperatura Eccessiva\n%s\n",body);        // write body to it.
-	fclose(fp);             // close it.
+		strcpy(tempFile,tempnam("/tmp","sendmail")); // generate temp file name with tempnam.
+		if(temps->ac > temps->maxAC)
+			sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
+		if(temps->amb > temps->maxAMB)
+			sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
+		FILE *fp = fopen(tempFile,"w"); // open it for writing.
+		fprintf(fp,"Subject: Rilevata temperatura Eccessiva\n%s\n",body);        // write body to it.
+		fclose(fp);             // close it.
 
-	sprintf(cmd,"sendmail %s < %s",to,tempFile); // prepare command.
-	system(cmd);     // execute it.
-	remove(tempFile); //remove TempFile
+		sprintf(cmd,"sendmail %s < %s",to,tempFile); // prepare command.
+		system(cmd);     // execute it.
+		remove(tempFile); //remove TempFile
+	}
 }
 
 void *handle_HighTemp(void *args){
@@ -76,7 +81,8 @@ void *handle_HighTemp(void *args){
 }
 
 
-float getAcTemp(){
+void *getAcTemp(void *args){
+	t_temps *temps  = (t_temps*)args;
 	FILE* fp = fopen("/sys/bus/w1/devices/28-0114536602aa/w1_slave","r");
 	if (fp == NULL){
 		perror("Errore nel leggere la temperatura");
@@ -92,10 +98,12 @@ float getAcTemp(){
 	float temperature = 0.0;
 	sscanf(temp_output,"t=%f",&temperature);
 	temperature/=1000;
-	return temperature;
+	temps->ac = temperature;
+	return NULL;
 }
 
-float getAmbTemp(){
+void *getAmbTemp(void *args){
+	t_temps *temps  = (t_temps*)args;
 	FILE* fp = fopen("/sys/bus/w1/devices/28-0114536858aa/w1_slave","r");
 	if (fp == NULL){
 		perror("Errore nel leggere la temperatura");
@@ -111,7 +119,8 @@ float getAmbTemp(){
 	float temperature = 0.0;
 	sscanf(temp_output,"t=%f",&temperature);
 	temperature/=1000;
-	return temperature;
+	temps->amb = temperature;
+	return NULL;
 }
 
 void *refresh_display(void *args){
@@ -126,25 +135,59 @@ void *refresh_display(void *args){
 }
 
 int main() {
+	//Populate recipients list
+	t_temps temps;
+	printf("Populating recipient list\n\n");
+	char c = 0; //Temp character
+	int i = 0; //Rows
+	int j = 0; //Columns
+	//Dinamic allocation of arrays (should work right)?
+	temps.recipients = calloc(1,sizeof(char*)); 
+	temps.recipients[0] = calloc(1,sizeof(char));
+	while((c = getchar()) != EOF && ((c & 0xff) != 0xff)){
+		if(c == '\n'){
+			c = getchar();
+			j = 0;
+			i++;
+			temps.recipients = realloc(temps.recipients,(i+1) * sizeof(char*));
+		}
+		temps.recipients[i] = realloc(temps.recipients[i],(j+1) * sizeof(char));
+		temps.recipients[i][j] = c;
+		j++;
+	}
+	temps.n_recipients = i;
+	printf("%d Recipients----------\n",temps.n_recipients);
+	for(i=0;i<temps.n_recipients;i++){
+		printf("%s\n",temps.recipients[i]);
+	}
+	printf("----------------------\n\n");
+	printf("Finished populating list\n");
+	printf("Temperature checking daemon started\n");
 	ssd1306_begin(SSD1306_SWITCHCAPVCC, SSD1306_I2C_ADDRESS);
 	ssd1306_clearDisplay();
+	//Create thread ids
 	pthread_t refresh_id; 
-	pthread_t email_id;
-	t_temps temps;
+	pthread_t hightemps_id;
+	pthread_t ac_id;
+	pthread_t amb_id;
 
 	temps.maxAC = 32.00;
 	temps.maxAMB = 50.00;
 
 	while(1){
-		temps.ac = getAcTemp();
-		temps.amb = getAmbTemp();
-		pthread_create(&refresh_id, NULL, refresh_display, &temps);
+	//	temps.ac = getAcTemp();
+	//	temps.amb = getAmbTemp();
+		pthread_create(&ac_id, NULL, getAcTemp, &temps);
+		pthread_create(&amb_id, NULL, getAmbTemp, &temps);
 		if(temps.ac > temps.maxAC || temps.amb > temps.maxAMB){	
-			pthread_create(&email_id, NULL, handle_HighTemp, &temps);
+			pthread_create(&hightemps_id, NULL, handle_HighTemp, &temps);
 		}
-		//Detach the thread to avoid memory leak
+		//Detach threads to avoid memory leak
+		pthread_detach(hightemps_id);
+		pthread_join(ac_id,NULL);
+		pthread_join(amb_id,NULL);
+		pthread_create(&refresh_id, NULL, refresh_display, &temps);
 		pthread_detach(refresh_id);
-		pthread_detach(email_id);
 		delay(500);
 	}
 	return 0;
