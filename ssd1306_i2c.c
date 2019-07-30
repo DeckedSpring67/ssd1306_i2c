@@ -44,7 +44,7 @@ int cursor_y = 0;
 int cursor_x = 0;
 
 // the memory buffer for the LCD. Displays Adafruit logo
-int buffer[SSD1306_LCDWIDTH * SSD1306_LCDHEIGHT / 8] = {
+unsigned int buffer[SSD1306_LCDWIDTH * SSD1306_LCDHEIGHT / 8] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -721,7 +721,7 @@ void ssd1306_fillRect(int x, int y, int w, int h, int fillcolor)
 
 	switch (rotation) {
 	case 1:
-		swap_values(x, y);
+		ssd1306_swap(x, y);
 		x = WIDTH - x - 1;
 		break;
 	case 2:
@@ -729,7 +729,7 @@ void ssd1306_fillRect(int x, int y, int w, int h, int fillcolor)
 		y = HEIGHT - y - 1;
 		break;
 	case 3:
-		swap_values(x, y);
+		ssd1306_swap(x, y);
 		y = HEIGHT - y - 1;
 		break;
 	}

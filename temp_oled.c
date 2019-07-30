@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <wiringPi.h>
+#include <limits.h>
 
 typedef struct temps{
 	float ac;
@@ -46,25 +47,30 @@ void send_email(t_temps *temps){
 		char to[100]; // email id of the recepient.
 		//strcpy(to,recipient);
 		sscanf(recipient,"%s\002",to);
+		char sender[50];
 		char body[400];    // email body.
-		char tempFile[100];     // name of tempfile.
 
-		strcpy(tempFile,tempnam("/tmp","sendmail")); // generate temp file name with tempnam.
 		//remove non printable characters
 		if(temps->ac > temps->maxAC)
 			sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
 		if(temps->amb > temps->maxAMB)
 			sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
-		FILE *fp = fopen(tempFile,"w"); // open it for writing.
+		char tempFile[100] = "/tmp/sendm.XXXXXX";
+		int fd = mkstemp(tempFile);
+		FILE *fp = fdopen(fd,"w"); // open it for writing.
+		
 		if(temps->isUrgent){
 			fprintf(fp,"X-priority: 1\n");
+			sprintf(sender,"urgente");
 		}else{
-			fprintf(fp,"X-priority: 3\n");
+			fprintf(fp,"X-priority: 5\n");
+			sprintf(sender,"allerta");
 		}
 		fprintf(fp,"Subject: Rilevata temperatura Eccessiva\n%s\n",body);        // write body to it.
 		fclose(fp);             // close it.
+		close(fd);
 
-		sprintf(cmd,"sendmail -f attenzione %s < %s",to,tempFile); // prepare command.
+		sprintf(cmd,"sendmail -f %s %s < %s",sender,to,tempFile); // prepare command.
 		system(cmd);     // execute it.
 		remove(tempFile); //remove TempFile
 	}
@@ -134,21 +140,23 @@ void sendLowTempEmail(t_temps *temps){
 		//strcpy(to,recipient);
 		sscanf(recipient,"%s\002",to);
 		char body[400];    // email body.
-		char tempFile[100];     // name of tempfile.
 
-		strcpy(tempFile,tempnam("/tmp","sendmail")); // generate temp file name with tempnam.
 		//remove non printable characters
-		if(temps->amb > temps->maxAMB)
-		sprintf(body,"Temperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->ac,temps->amb);
-		FILE *fp = fopen(tempFile,"w"); // open it for writing.
-		fprintf(fp,"X-Priority: 5\n");
-		fprintf(fp,"Subject: Temperatura tornata normale\n");        // write body to it.
-		fprintf(fp,"%s\n",body);
+		char tempFile[100] = "/tmp/sendm.XXXXXX";     // name of tempfile.
+		int fd = mkstemp(tempFile);
+		FILE *fp = fdopen(fd,"w"); // open it for writing.
+		//Write body
+		sprintf(body,"X-Priority: 5\n");
+		fprintf(fp,"%s",body);
+		sprintf(body,"Subject: Temperatura rientrata nei valori nominali\n");        
+		fprintf(fp,"%s",body);
+		sprintf(body,"Temperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius\n",temps->ac,temps->amb);
+		fprintf(fp,"%s",body);
 		fclose(fp);             // close it.
+		close(fd);
 
 		sprintf(cmd,"sendmail -f notifica %s < %s",to,tempFile); // prepare command.
 		system(cmd);     // execute it.
-		printf("%s",body);
 		//remove(tempFile); //remove TempFile
 	}
 }
@@ -167,8 +175,8 @@ void *handle_LowTemp(void *args){
 	fscanf(checkSent,"%s",hasBeenSent);
 	fclose(checkSent);
 	if(hasBeenSent[0] == 'y'){
+		system("setEmailSent");
 		sendLowTempEmail(temps);
-		system("bash setEmailSent.sh");
 	}
 	openRelay1();
 	openRelay2();
@@ -238,17 +246,16 @@ int main() {
 	openRelay1();
 	openRelay2();
 	t_temps temps;
-	system("sh setEmailSent.sh");
+	system("setEmailSent");
 	//Populate recipients list
 	printf("Populating recipient list\n\n");
 	char c = 0; //Temp character
 	int i = 0; //Rows
 	int j = 0; //Columns
-	FILE *fp = fopen("recipients","r");
 	//Dinamic allocation of arrays (should work right)?
 	temps.recipients = calloc(1,sizeof(char*)); 
 	temps.recipients[0] = calloc(1,sizeof(char));
-	while((c = fgetc(fp)) != EOF && (c & 0xFF) != 0xFF){
+	while((c = getchar()) != EOF && (c & 0xFF) != 0xFF){
 		if(c == '\n'){
 			temps.recipients[i][j] = 0;
 			j = 0;
@@ -283,24 +290,24 @@ int main() {
 	temps.maxAMB = 50.00;
 
 	while(1){
-	//	temps.ac = getAcTemp();
-	//	temps.amb = getAmbTemp();
 		pthread_create(&ac_id, NULL, getAcTemp, &temps);
 		pthread_create(&amb_id, NULL, getAmbTemp, &temps);
 		
 		//Detach threads to avoid memory leak
 		pthread_join(ac_id,NULL);
 		pthread_join(amb_id,NULL);
+
+		pthread_create(&refresh_id, NULL, refresh_display, &temps);
+		pthread_detach(refresh_id);
+
 		if(temps.ac > temps.maxAC || temps.amb > temps.maxAMB){	
 			pthread_create(&hightemps_id, NULL, handle_HighTemp, &temps);
 		}
-		else{
+		else if(temps.ac < (temps.maxAC - 1) && temps.amb < (temps.maxAMB - 1)){
 			pthread_create(&lowtemps_id, NULL, handle_LowTemp, &temps);
 		}
 		pthread_detach(lowtemps_id);
 		pthread_detach(hightemps_id);
-		pthread_create(&refresh_id, NULL, refresh_display, &temps);
-		pthread_detach(refresh_id);
 		delay(500);
 	}
 	return 0;
