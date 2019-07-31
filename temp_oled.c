@@ -8,6 +8,13 @@
 #include <wiringPi.h>
 #include <limits.h>
 
+//Constants
+static int const mailInterval = 15;
+static int const lightInterval = 60;
+static double const maxAC = 32;
+static double const maxAMB = 32;
+static char* const recipients = "/opt/temp_oled/recipients";
+
 typedef struct temps{
 	float ac;
 	float amb;
@@ -15,11 +22,8 @@ typedef struct temps{
 	float maxAMB;
 	time_t timeLastSent;
 	int isUrgent;
-	char **recipients;
-	int n_recipients;
+	char *recipients; //Path for recipients file
 }t_temps;
-
-
 
 
 void closeRelay1(){
@@ -31,49 +35,47 @@ void closeRelay2(){
 }
 
 void openRelay1(){
-	digitalWrite(29,HIGH);
+	digitalWrite(28,HIGH);
 }
 
 void openRelay2(){
 	digitalWrite(29,HIGH);
 }
 
+void handleInterrupt(){
+	openRelay1();
+	openRelay2();
+}
+
 
 void send_email(t_temps *temps){
-	int i = 0;
-	for(i = 0; i < temps->n_recipients;i++){
-		char* recipient = temps->recipients[i];
-		char cmd[300];  
-		char to[100]; // email id of the recepient.
-		//strcpy(to,recipient);
-		sscanf(recipient,"%s\002",to);
-		char sender[50];
-		char body[400];    // email body.
+	char cmd[300];  
+	char sender[50];
+	char body[400];    // email body.
 
-		//remove non printable characters
-		if(temps->ac > temps->maxAC)
-			sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
-		if(temps->amb > temps->maxAMB)
-			sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
-		char tempFile[100] = "/tmp/sendm.XXXXXX";
-		int fd = mkstemp(tempFile);
-		FILE *fp = fdopen(fd,"w"); // open it for writing.
-		
-		if(temps->isUrgent){
-			fprintf(fp,"X-priority: 1\n");
-			sprintf(sender,"urgente");
-		}else{
-			fprintf(fp,"X-priority: 5\n");
-			sprintf(sender,"allerta");
-		}
-		fprintf(fp,"Subject: Rilevata temperatura Eccessiva\n%s\n",body);        // write body to it.
-		fclose(fp);             // close it.
-		close(fd);
-
-		sprintf(cmd,"sendmail -f %s %s < %s",sender,to,tempFile); // prepare command.
-		system(cmd);     // execute it.
-		remove(tempFile); //remove TempFile
+	//remove non printable characters
+	if(temps->ac > temps->maxAC)
+		sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
+	if(temps->amb > temps->maxAMB)
+		sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
+	char tempFile[100] = "/tmp/sendm.XXXXXX";
+	int fd = mkstemp(tempFile);
+	FILE *fp = fdopen(fd,"w"); // open it for writing.
+	
+	if(temps->isUrgent){
+		fprintf(fp,"X-priority: 1\n");
+		sprintf(sender,"urgente");
+	}else{
+		fprintf(fp,"X-priority: 5\n");
+		sprintf(sender,"allerta");
 	}
+	fprintf(fp,"Subject: Rilevata temperatura Eccessiva\n%s\n",body);        // write body to it.
+	fclose(fp);             // close it.
+	close(fd);
+
+	sprintf(cmd,"/usr/sbin/sendmail -f %s $(cat %s) < %s",sender,recipients,tempFile); // prepare command.
+	system(cmd);     // execute it.
+	remove(tempFile); //remove TempFile
 }
 
 void *handle_HighTemp(void *args){
@@ -119,10 +121,11 @@ void *handle_HighTemp(void *args){
 		time(&timeNow);
 		double timeDiff = difftime(timeNow,(temps->timeLastSent)); 
 		//TODO Change to 15 back again
-		if((timeDiff/60) > 1){
+		if((timeDiff/60) > mailInterval){
 			temps->isUrgent = 1;
-			//Keep Relay1 closed but Open Relay2
-			openRelay2();
+			//Keep Relays closed
+			closeRelay1();
+			closeRelay2();
 			time(&(temps->timeLastSent));
 			send_email(temps);
 		}
@@ -132,33 +135,26 @@ void *handle_HighTemp(void *args){
 
 
 void sendLowTempEmail(t_temps *temps){
-	int i = 0;
-	for(i = 0; i < temps->n_recipients;i++){
-		char* recipient = temps->recipients[i];
-		char cmd[300];  
-		char to[100]; // email id of the recepient.
-		//strcpy(to,recipient);
-		sscanf(recipient,"%s\002",to);
-		char body[400];    // email body.
+	char cmd[300];  
+	char body[400];    // email body.
 
-		//remove non printable characters
-		char tempFile[100] = "/tmp/sendm.XXXXXX";     // name of tempfile.
-		int fd = mkstemp(tempFile);
-		FILE *fp = fdopen(fd,"w"); // open it for writing.
-		//Write body
-		sprintf(body,"X-Priority: 5\n");
-		fprintf(fp,"%s",body);
-		sprintf(body,"Subject: Temperatura rientrata nei valori nominali\n");        
-		fprintf(fp,"%s",body);
-		sprintf(body,"Temperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius\n",temps->ac,temps->amb);
-		fprintf(fp,"%s",body);
-		fclose(fp);             // close it.
-		close(fd);
+	//remove non printable characters
+	char tempFile[100] = "/tmp/sendm.XXXXXX";     // name of tempfile.
+	int fd = mkstemp(tempFile);
+	FILE *fp = fdopen(fd,"w"); // open it for writing.
+	//Write body
+	sprintf(body,"X-Priority: 5\n");
+	fprintf(fp,"%s",body);
+	sprintf(body,"Subject: Temperatura rientrata nei valori nominali\n");        
+	fprintf(fp,"%s",body);
+	sprintf(body,"Temperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius\n",temps->ac,temps->amb);
+	fprintf(fp,"%s",body);
+	fclose(fp);             // close it.
+	close(fd);
 
-		sprintf(cmd,"sendmail -f notifica %s < %s",to,tempFile); // prepare command.
-		system(cmd);     // execute it.
-		//remove(tempFile); //remove TempFile
-	}
+	sprintf(cmd,"/usr/sbin/sendmail -f notifica $(cat %s) < %s",recipients,tempFile); // prepare command.
+	system(cmd);     // execute it.
+	//remove(tempFile); //remove TempFile
 }
 
 void *handle_LowTemp(void *args){
@@ -177,9 +173,21 @@ void *handle_LowTemp(void *args){
 	if(hasBeenSent[0] == 'y'){
 		system("setEmailSent");
 		sendLowTempEmail(temps);
+		time(&(temps->timeLastSent));
+		//Keep Relay2 closed but open Relay1
+		openRelay1();
+		closeRelay2();
 	}
-	openRelay1();
-	openRelay2();
+	if(temps->timeLastSent){
+		time_t timeNow;
+		time(&(timeNow));
+		double timeDiff = difftime(timeNow,(temps->timeLastSent)); 
+		//After lightInterval we open both relays
+		if((timeDiff / 60) > lightInterval){
+			openRelay1();
+			openRelay2();
+		}
+	}
 	return NULL;	
 }
 
@@ -241,18 +249,25 @@ void *refresh_display(void *args){
 int main() {
 	//setup pins and other stuff
 	wiringPiSetup();
+	//Interrupt for button
+	wiringPiISR(27,INT_EDGE_RISING,&handleInterrupt);
+	//Relay1
 	pinMode(28,OUTPUT);
+	//Relay2
 	pinMode(29,OUTPUT);
 	openRelay1();
 	openRelay2();
 	t_temps temps;
 	system("setEmailSent");
-	//Populate recipients list
-	printf("Populating recipient list\n\n");
+	//Set recipients path
+	//TODO implement sys argument
+	temps.recipients = recipients;
+	/* Not used anymore
+	//Dinamic allocation of arrays (should work right)?
 	char c = 0; //Temp character
 	int i = 0; //Rows
 	int j = 0; //Columns
-	//Dinamic allocation of arrays (should work right)?
+	
 	temps.recipients = calloc(1,sizeof(char*)); 
 	temps.recipients[0] = calloc(1,sizeof(char));
 	while((c = getchar()) != EOF && (c & 0xFF) != 0xFF){
@@ -276,6 +291,7 @@ int main() {
 	}
 	printf("----------------------\n\n");
 	printf("Finished populating list\n");
+	*/
 	printf("Temperature checking daemon started\n");
 	ssd1306_begin(SSD1306_SWITCHCAPVCC, SSD1306_I2C_ADDRESS);
 	ssd1306_clearDisplay();
@@ -286,8 +302,9 @@ int main() {
 	pthread_t amb_id;
 	pthread_t lowtemps_id;
 
-	temps.maxAC = 32.00;
-	temps.maxAMB = 50.00;
+	temps.maxAC = maxAC;
+	temps.maxAMB = maxAMB;
+	temps.timeLastSent = 0;
 
 	while(1){
 		pthread_create(&ac_id, NULL, getAcTemp, &temps);
