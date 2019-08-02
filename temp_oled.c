@@ -13,7 +13,7 @@ static int const mailInterval = 15;
 static int const lightInterval = 60;
 static double const maxAC = 32;
 static double const maxAMB = 32;
-static char* const recipients = "/opt/temp_oled/recipients";
+static char* const RECIPIENTS = "/opt/temp_oled/recipients";
 
 typedef struct temps{
 	float ac;
@@ -73,7 +73,7 @@ void send_email(t_temps *temps){
 	fclose(fp);             // close it.
 	close(fd);
 
-	sprintf(cmd,"/usr/sbin/sendmail -f %s $(cat %s) < %s",sender,recipients,tempFile); // prepare command.
+	sprintf(cmd,"/usr/sbin/sendmail -f %s $(cat %s) < %s",sender,temps->recipients,tempFile); // prepare command.
 	system(cmd);     // execute it.
 	remove(tempFile); //remove TempFile
 }
@@ -152,7 +152,7 @@ void sendLowTempEmail(t_temps *temps){
 	fclose(fp);             // close it.
 	close(fd);
 
-	sprintf(cmd,"/usr/sbin/sendmail -f notifica $(cat %s) < %s",recipients,tempFile); // prepare command.
+	sprintf(cmd,"/usr/sbin/sendmail -f notifica $(cat %s) < %s",temps->recipients,tempFile); // prepare command.
 	system(cmd);     // execute it.
 	//remove(tempFile); //remove TempFile
 }
@@ -257,44 +257,15 @@ int main() {
 	pinMode(29,OUTPUT);
 	openRelay1();
 	openRelay2();
-	t_temps temps;
-	system("setEmailSent");
-	//Set recipients path
-	//TODO implement sys argument
-	temps.recipients = recipients;
-	/* Not used anymore
-	//Dinamic allocation of arrays (should work right)?
-	char c = 0; //Temp character
-	int i = 0; //Rows
-	int j = 0; //Columns
 	
-	temps.recipients = calloc(1,sizeof(char*)); 
-	temps.recipients[0] = calloc(1,sizeof(char));
-	while((c = getchar()) != EOF && (c & 0xFF) != 0xFF){
-		if(c == '\n'){
-			temps.recipients[i][j] = 0;
-			j = 0;
-			i++;
-			temps.recipients = realloc(temps.recipients,(i+1) * sizeof(char*));
-		}
-		else{ 
-			temps.recipients[i] = realloc(temps.recipients[i],(j+1) * sizeof(char));
-			temps.recipients[i][j] = c;
-			j++;
-		}
-	}
-	temps.n_recipients = i;
-	temps.isUrgent = 0;
-	printf("%d Recipients----------\n",temps.n_recipients);
-	for(i=0;i<temps.n_recipients;i++){
-		printf("%s\n",temps.recipients[i]);
-	}
-	printf("----------------------\n\n");
-	printf("Finished populating list\n");
-	*/
+	
+	//Reset emailSent status
+	system("setEmailSent");
+	
 	printf("Temperature checking daemon started\n");
 	ssd1306_begin(SSD1306_SWITCHCAPVCC, SSD1306_I2C_ADDRESS);
 	ssd1306_clearDisplay();
+	
 	//Create thread ids
 	pthread_t refresh_id; 
 	pthread_t hightemps_id;
@@ -302,9 +273,19 @@ int main() {
 	pthread_t amb_id;
 	pthread_t lowtemps_id;
 
+	t_temps temps;
 	temps.maxAC = maxAC;
 	temps.maxAMB = maxAMB;
+	//Set recipients path
+	//TODO implement sys argument
+	temps.recipients = RECIPIENTS;
+
 	temps.timeLastSent = 0;
+
+	//Add a slight delay after the first reading to prevent wrong ones
+	pthread_create(&ac_id, NULL, getAcTemp, &temps);
+	pthread_create(&amb_id, NULL, getAmbTemp, &temps);
+	delay(1000);
 
 	while(1){
 		pthread_create(&ac_id, NULL, getAcTemp, &temps);
