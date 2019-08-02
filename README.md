@@ -10,6 +10,6 @@ You also need to symlink to your path checkTemps.sh into checkTemps and setEmail
 
 ### Requirements
 
-Needs to be run on Linux with setmail installed.
+Needs to be run on Linux with sendmail installed.
 
 
