@@ -9,11 +9,17 @@
 #include <limits.h>
 
 //Constants
-static int const mailInterval = 15;
-static int const lightInterval = 60;
-static double const maxAC = 32;
-static double const maxAMB = 32;
+static int const mailInterval = 15; //Default 15
+static int const lightInterval = 60; //Default 60
+static double const maxAC = 32; //Default 15
+static double const maxAMB = 32; //Default 35
 static char* const RECIPIENTS = "/opt/temp_oled/recipients";
+static char* const SENSOR_AC = "/sys/bus/w1/devices/28-0114536602aa/w1_slave";
+static char* const SENSOR_AMB = "/sys/bus/w1/devices/28-0114536858aa/w1_slave";
+
+//Gloabal button thingy
+u_int8_t buttonPressed = 0;
+time_t timeButtonPressed;
 
 typedef struct temps{
 	float ac;
@@ -43,12 +49,22 @@ void openRelay2(){
 }
 
 void handleInterrupt(){
+	printf("Premuto pulsante\n");
+	fflush(stdout);
+	if(!buttonPressed){
+		buttonPressed = 1;
+		time(&(timeButtonPressed));
+	}
+	else{
+		buttonPressed = 0;
+	}
 	openRelay1();
 	openRelay2();
 }
 
 
-void send_email(t_temps *temps){
+void *send_email(void *args){
+	t_temps *temps = (t_temps*) args;
 	char cmd[300];  
 	char sender[50];
 	char body[400];    // email body.
@@ -76,7 +92,9 @@ void send_email(t_temps *temps){
 	sprintf(cmd,"/usr/sbin/sendmail -f %s $(cat %s) < %s",sender,temps->recipients,tempFile); // prepare command.
 	system(cmd);     // execute it.
 	remove(tempFile); //remove TempFile
+	return NULL;
 }
+
 
 void *handle_HighTemp(void *args){
 	t_temps *temps = (t_temps*)args;
@@ -98,6 +116,7 @@ void *handle_HighTemp(void *args){
 	fscanf(checkSent,"%s",hasBeenSent);
 	fclose(checkSent);
 	//If it hasn't been sent yet prepare the mail, to do that we need a tempfile where we will redirect it to sendmail
+	pthread_t mailthread;
 	if(hasBeenSent[0] == 'n'){
 		//Modify hasSentMail, well it hasn't sent the email yet but it's going to
 		//We need to do this in order to only one mail since this method will be called alot when the temperatures
@@ -115,26 +134,29 @@ void *handle_HighTemp(void *args){
 		//After we modify the tmpfile we can proceed on actually sending the mail
 		time(&(temps->timeLastSent));
 		temps->isUrgent = 0;
-		send_email(temps);
+		pthread_create(&mailthread, NULL, send_email,temps);
+		pthread_detach(mailthread);
+
 	}else{
 		time_t timeNow;
 		time(&timeNow);
 		double timeDiff = difftime(timeNow,(temps->timeLastSent)); 
-		//TODO Change to 15 back again
 		if((timeDiff/60) > mailInterval){
 			temps->isUrgent = 1;
 			//Keep Relays closed
 			closeRelay1();
 			closeRelay2();
 			time(&(temps->timeLastSent));
-			send_email(temps);
+			pthread_create(&mailthread, NULL, send_email,temps);
+			pthread_detach(mailthread);
 		}
 	}
 	return NULL;
 }
 
 
-void sendLowTempEmail(t_temps *temps){
+void *sendLowTempEmail(void *args){
+	t_temps *temps = (t_temps*)args;
 	char cmd[300];  
 	char body[400];    // email body.
 
@@ -154,7 +176,8 @@ void sendLowTempEmail(t_temps *temps){
 
 	sprintf(cmd,"/usr/sbin/sendmail -f notifica $(cat %s) < %s",temps->recipients,tempFile); // prepare command.
 	system(cmd);     // execute it.
-	//remove(tempFile); //remove TempFile
+	remove(tempFile); //remove TempFile
+	return NULL;
 }
 
 void *handle_LowTemp(void *args){
@@ -172,6 +195,9 @@ void *handle_LowTemp(void *args){
 	fclose(checkSent);
 	if(hasBeenSent[0] == 'y'){
 		system("setEmailSent");
+		pthread_t mailthread;
+		pthread_create(&mailthread, NULL, sendLowTempEmail, temps);
+		pthread_detach(mailthread);
 		sendLowTempEmail(temps);
 		time(&(temps->timeLastSent));
 		//Keep Relay2 closed but open Relay1
@@ -195,7 +221,7 @@ void *handle_LowTemp(void *args){
 
 void *getAcTemp(void *args){
 	t_temps *temps  = (t_temps*)args;
-	FILE* fp = fopen("/sys/bus/w1/devices/28-0114536602aa/w1_slave","r");
+	FILE* fp = fopen(SENSOR_AC,"r");
 	if (fp == NULL){
 		perror("Errore nel leggere la temperatura");
 		char* text = "Errore nella lettura della temperatura della sonda \"Condizionatore\"";
@@ -216,7 +242,7 @@ void *getAcTemp(void *args){
 
 void *getAmbTemp(void *args){
 	t_temps *temps  = (t_temps*)args;
-	FILE* fp = fopen("/sys/bus/w1/devices/28-0114536858aa/w1_slave","r");
+	FILE* fp = fopen(SENSOR_AMB,"r");
 	if (fp == NULL){
 		perror("Errore nel leggere la temperatura");
 		char* text = "Errore nella lettura della temperatura della sonda \"Condizionatore\"";
@@ -287,25 +313,48 @@ int main() {
 	pthread_create(&amb_id, NULL, getAmbTemp, &temps);
 	delay(1000);
 
+	//create other variables
+	time_t timeNow;
+	double timeDiff;
+	char text[300];
+
 	while(1){
-		pthread_create(&ac_id, NULL, getAcTemp, &temps);
-		pthread_create(&amb_id, NULL, getAmbTemp, &temps);
-		
-		//Detach threads to avoid memory leak
-		pthread_join(ac_id,NULL);
-		pthread_join(amb_id,NULL);
+		if(!buttonPressed){
+			pthread_create(&ac_id, NULL, getAcTemp, &temps);
+			pthread_create(&amb_id, NULL, getAmbTemp, &temps);
+			
+			//Detach threads to avoid memory leak
+			pthread_join(ac_id,NULL);
+			pthread_join(amb_id,NULL);
 
-		pthread_create(&refresh_id, NULL, refresh_display, &temps);
-		pthread_detach(refresh_id);
+			pthread_create(&refresh_id, NULL, refresh_display, &temps);
+			pthread_detach(refresh_id);
 
-		if(temps.ac > temps.maxAC || temps.amb > temps.maxAMB){	
-			pthread_create(&hightemps_id, NULL, handle_HighTemp, &temps);
+				if(temps.ac > temps.maxAC || temps.amb > temps.maxAMB){	
+					pthread_create(&hightemps_id, NULL, handle_HighTemp, &temps);
+				}
+				else if(temps.ac < (temps.maxAC - 1) && temps.amb < (temps.maxAMB - 1)){
+					pthread_create(&lowtemps_id, NULL, handle_LowTemp, &temps);
+				}
+			pthread_detach(lowtemps_id);
+			pthread_detach(hightemps_id);
 		}
-		else if(temps.ac < (temps.maxAC - 1) && temps.amb < (temps.maxAMB - 1)){
-			pthread_create(&lowtemps_id, NULL, handle_LowTemp, &temps);
+		else{
+			time(&(timeNow));
+			timeDiff = difftime(timeNow,timeButtonPressed);
+			//When button has been pressed pause the program for 15 minutes
+			// and show it on screen
+			if(timeDiff < 900){
+				sprintf(text,"Sistema in pausa\n%.0f sec. al riavvio\nPremere RESET per \nriavvio manuale\n",900-timeDiff);
+				ssd1306_setTextSize(1);
+				ssd1306_drawString(text);
+				ssd1306_display();
+				ssd1306_clearDisplay();
+			}
+			else{
+				buttonPressed = 0;
+			}
 		}
-		pthread_detach(lowtemps_id);
-		pthread_detach(hightemps_id);
 		delay(500);
 	}
 	return 0;
