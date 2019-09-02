@@ -20,6 +20,7 @@ static char* const SENSOR_AMB = "/sys/bus/w1/devices/28-0114536858aa/w1_slave";
 //Gloabal button thingy
 u_int8_t buttonPressed = 0;
 time_t timeButtonPressed;
+time_t timeLastLog;
 
 typedef struct temps{
 	float ac;
@@ -29,6 +30,7 @@ typedef struct temps{
 	time_t timeLastSent;
 	int isUrgent;
 	char *recipients; //Path for recipients file
+	char *temp_alert; //Contains either ac, amb or none depending on the temperetaures
 }t_temps;
 
 
@@ -62,6 +64,19 @@ void handleInterrupt(){
 	openRelay2();
 }
 
+void logPrintf(char* body,time_t timeNow){
+	if(difftime(timeNow,timeLastLog) > 120){
+		time(&(timeLastLog));
+		FILE *log = fopen("/var/log/temp_oled.csv","a");
+		char sdate[200];
+		FILE *date = popen("date","r");
+		fgets(sdate, 28, date);
+		fprintf(log,"%s;%s\n",sdate,body);
+		fflush(log);
+		fclose(log);
+	}
+}
+
 
 void *send_email(void *args){
 	t_temps *temps = (t_temps*) args;
@@ -70,10 +85,14 @@ void *send_email(void *args){
 	char body[400];    // email body.
 
 	//remove non printable characters
-	if(temps->ac > temps->maxAC)
+	if(temps->ac > temps->maxAC){
 		sprintf(body,"Attenzione!\nLa Temperatura del Condizionatore ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAC,temps->ac,temps->amb);
-	if(temps->amb > temps->maxAMB)
+		temps->temp_alert = "ac";
+	}
+	if(temps->amb > temps->maxAMB){
 		sprintf(body,"Attenzione!\nLa Temperatura Ambiente ha superato i %.3f gradi:\nTemperatura Condizionatore rilevata: %.3f gradi Celsius.\nTemperatura Ambiente rilevata: %.3f gradi Celsius",temps->maxAMB,temps->ac,temps->amb);
+		temps->temp_alert = "amb";
+	}
 	char tempFile[100] = "/tmp/sendm.XXXXXX";
 	int fd = mkstemp(tempFile);
 	FILE *fp = fdopen(fd,"w"); // open it for writing.
@@ -159,6 +178,7 @@ void *sendLowTempEmail(void *args){
 	t_temps *temps = (t_temps*)args;
 	char cmd[300];  
 	char body[400];    // email body.
+	temps->temp_alert = "none";
 
 	//remove non printable characters
 	char tempFile[100] = "/tmp/sendm.XXXXXX";     // name of tempfile.
@@ -198,7 +218,6 @@ void *handle_LowTemp(void *args){
 		pthread_t mailthread;
 		pthread_create(&mailthread, NULL, sendLowTempEmail, temps);
 		pthread_detach(mailthread);
-		sendLowTempEmail(temps);
 		time(&(temps->timeLastSent));
 		//Keep Relay2 closed but open Relay1
 		openRelay1();
@@ -273,6 +292,13 @@ void *refresh_display(void *args){
 }
 
 int main() {
+	//Check if logfile exists, if not create it with a proper header
+	if(access("/var/log/temp_oled.csv", F_OK ) == -1 ) {
+		FILE *log = fopen("/var/log/temp_oled.csv","w");
+		fprintf(log,"Data;temp_ac;temp_amb;dispositivo_in_allerta\n");
+		fflush(log);
+		fclose(log);
+	}
 	//setup pins and other stuff
 	wiringPiSetup();
 	//Interrupt for button
@@ -305,6 +331,7 @@ int main() {
 	//Set recipients path
 	//TODO implement sys argument
 	temps.recipients = RECIPIENTS;
+	temps.temp_alert = "none";
 
 	temps.timeLastSent = 0;
 
@@ -317,6 +344,8 @@ int main() {
 	time_t timeNow;
 	double timeDiff;
 	char text[300];
+	time_t timeNowLog;
+	timeLastLog = 0;
 
 	while(1){
 		if(!buttonPressed){
@@ -355,6 +384,10 @@ int main() {
 				buttonPressed = 0;
 			}
 		}
+		char logbody[400];
+		time(&(timeNowLog));
+	       	sprintf(logbody,"%f;%f;%s",temps.ac,temps.amb,temps.temp_alert);
+		logPrintf(logbody,timeNowLog);
 		delay(500);
 	}
 	return 0;
